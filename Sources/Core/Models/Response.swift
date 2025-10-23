@@ -63,28 +63,38 @@ public struct Response: Identifiable, Equatable, Hashable, Codable, Sendable {
 		case inProgress = "in_progress"
 	}
 
-	public struct Usage: Equatable, Hashable, Codable, Sendable {
-		public let totalTokens: Int
-		public let inputTokens: Int
-		public let outputTokens: Int
-		public let inputTokenDetails: InputTokenDetails
-		public let outputTokenDetails: OutputTokenDetails
+	public enum Usage: Equatable, Hashable, Sendable {
+		case tokens(TokenUsage)
+		case duration(DurationUsage)
+		
+		public struct TokenUsage: Equatable, Hashable, Codable, Sendable {
+			public let totalTokens: Int
+			public let inputTokens: Int
+			public let outputTokens: Int
+			public let inputTokenDetails: InputTokenDetails
+			public let outputTokenDetails: OutputTokenDetails
 
-		public struct InputTokenDetails: Equatable, Hashable, Codable, Sendable {
-			public let textTokens: Int
-			public let audioTokens: Int
-			public let cachedTokens: Int
-			public let cachedTokensDetails: CachedTokensDetails
+			public struct InputTokenDetails: Equatable, Hashable, Codable, Sendable {
+				public let textTokens: Int
+				public let audioTokens: Int
+				public let cachedTokens: Int
+				public let cachedTokensDetails: CachedTokensDetails
 
-			public struct CachedTokensDetails: Equatable, Hashable, Codable, Sendable {
+				public struct CachedTokensDetails: Equatable, Hashable, Codable, Sendable {
+					public let textTokens: Int
+					public let audioTokens: Int
+				}
+			}
+
+			public struct OutputTokenDetails: Equatable, Hashable, Codable, Sendable {
 				public let textTokens: Int
 				public let audioTokens: Int
 			}
 		}
-
-		public struct OutputTokenDetails: Equatable, Hashable, Codable, Sendable {
-			public let textTokens: Int
-			public let audioTokens: Int
+		
+		public struct DurationUsage: Equatable, Hashable, Codable, Sendable {
+			public let type: String  // "duration"
+			public let seconds: Int
 		}
 	}
 
@@ -105,4 +115,50 @@ public struct Response: Identifiable, Equatable, Hashable, Codable, Sendable {
 
 	/// Developer-provided string key-value pairs associated with this response.
 	public let metadata: [String: String]?
+}
+
+// MARK: - Usage Codable Implementation
+extension Response.Usage: Codable {
+	private enum CodingKeys: String, CodingKey {
+		case type
+	}
+	
+	public init(from decoder: any Decoder) throws {
+		// 尝试解码为 duration-based
+		if let container = try? decoder.container(keyedBy: CodingKeys.self),
+		   let type = try? container.decode(String.self, forKey: .type),
+		   type == "duration" {
+			self = try .duration(DurationUsage(from: decoder))
+			return
+		}
+		
+		// 否则尝试解码为 token-based
+		self = try .tokens(TokenUsage(from: decoder))
+	}
+	
+	public func encode(to encoder: any Encoder) throws {
+		switch self {
+		case .tokens(let usage):
+			try usage.encode(to: encoder)
+		case .duration(let usage):
+			try usage.encode(to: encoder)
+		}
+	}
+}
+
+// MARK: - Usage Convenience Properties
+extension Response.Usage {
+	public var totalTokens: Int? {
+		if case .tokens(let usage) = self {
+			return usage.totalTokens
+		}
+		return nil
+	}
+	
+	public var durationSeconds: Int? {
+		if case .duration(let usage) = self {
+			return usage.seconds
+		}
+		return nil
+	}
 }

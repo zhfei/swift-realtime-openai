@@ -178,6 +178,8 @@ private extension Conversation {
 				self.session = session
 			case let .conversationItemCreated(_, item, _):
 				entries.append(item)
+			case let .conversationItemAdded(_, item, _):
+				entries.append(item)
 			case let .conversationItemDeleted(_, itemId):
 				entries.removeAll { $0.id == itemId }
 			case let .conversationItemInputAudioTranscriptionCompleted(_, itemId, contentIndex, transcript, _, _):
