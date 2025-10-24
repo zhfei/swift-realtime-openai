@@ -51,6 +51,12 @@ public final class Conversation: @unchecked Sendable {
 	/// Whether the model is currently speaking.
 	public private(set) var isModelSpeaking: Bool = false
 
+	/// 是否启用音频录制（默认关闭）
+	public var enableAudioRecording: Bool = false
+
+	/// 录制的音频文件URL
+	private var recordedAudioURL: URL?
+
 	/// A list of messages in the conversation.
 	/// Note that this doesn't include function call events. To get a complete list, use `entries`.
 	public var messages: [Item.Message] {
@@ -83,6 +89,8 @@ public final class Conversation: @unchecked Sendable {
 	}
 
 	deinit {
+		// 停止录制
+		_ = stopAudioRecording()
 		client.disconnect()
 		errorStream.finish()
 	}
@@ -90,7 +98,17 @@ public final class Conversation: @unchecked Sendable {
 	public func connect(using request: URLRequest) async throws {
 		await AVAudioApplication.requestRecordPermission()
 
+		// 在连接前设置录制状态
+		if enableAudioRecording {
+			client.isRecordingEnabled = true
+		}
+
 		try await client.connect(using: request)
+		
+		// 连接后启动录制
+		if enableAudioRecording {
+			try? startAudioRecording()
+		}
 	}
 
 	public func connect(ephemeralKey: String, model: Model = .gptRealtime) async throws {
@@ -113,6 +131,30 @@ public final class Conversation: @unchecked Sendable {
 	public func whenConnected<E>(_ callback: @Sendable () async throws(E) -> Void) async throws(E) {
 		await waitForConnection()
 		try await callback()
+	}
+
+	/// 开始录制对话音频
+	public func startAudioRecording() throws {
+		guard enableAudioRecording else { return }
+		
+		// 启用WebRTC连接器的录制
+		client.isRecordingEnabled = true
+		recordedAudioURL = try client.startRecording()
+		
+		print("🎙️ [Conversation] 开始录制音频")
+	}
+
+	/// 停止录制并返回音频文件URL
+	public func stopAudioRecording() -> URL? {
+		let url = client.stopRecording()
+		recordedAudioURL = url
+		print("🎙️ [Conversation] 停止录制音频: \(url?.lastPathComponent ?? "nil")")
+		return url
+	}
+
+	/// 获取录制的音频文件URL
+	public func getRecordedAudioURL() -> URL? {
+		return recordedAudioURL
 	}
 
 	/// Make changes to the current session

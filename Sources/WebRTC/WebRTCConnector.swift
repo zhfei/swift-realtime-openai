@@ -29,6 +29,10 @@ import FoundationNetworking
 	private let dataChannel: LKRTCDataChannel
 	private let connection: LKRTCPeerConnection
 
+	// 添加音频录制器
+	private var audioRecorder: WebRTCAudioRecorder?
+	public var isRecordingEnabled: Bool = false
+
 	private let stream: AsyncThrowingStream<ServerEvent, Error>.Continuation
 
 	private static let factory: LKRTCPeerConnectionFactory = {
@@ -87,6 +91,26 @@ import FoundationNetworking
 
 	public func toggleMute() {
 		audioTrack.isEnabled.toggle()
+	}
+
+	// 添加录制控制方法
+	public func startRecording() throws -> URL {
+		let recorder = WebRTCAudioRecorder()
+		let (remoteURL, localURL) = try recorder.startRecording()
+		audioRecorder = recorder
+		
+		// 如果已经有远程音频流，立即添加渲染器
+		// 注意：需要等待peerConnection(_:didAdd:)回调
+		
+		print("🎙️ [WebRTCConnector] 开始录制音频")
+		return remoteURL
+	}
+
+	public func stopRecording() -> URL? {
+		let url = audioRecorder?.stopRecording()
+		audioRecorder = nil
+		print("🎙️ [WebRTCConnector] 停止录制音频")
+		return url
 	}
 }
 
@@ -178,7 +202,20 @@ private extension WebRTCConnector {
 
 extension WebRTCConnector: LKRTCPeerConnectionDelegate {
 	public func peerConnectionShouldNegotiate(_: LKRTCPeerConnection) {}
-	public func peerConnection(_: LKRTCPeerConnection, didAdd _: LKRTCMediaStream) {}
+	public func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {
+		print("🎧 [WebRTCConnector] 收到远程音频流")
+		
+		// 遍历音频轨道
+		for audioTrack in stream.audioTracks {
+			print("🎧 [WebRTCConnector] 添加远程音频轨道: \(audioTrack.trackId)")
+			
+			// 如果启用了录制，添加音频渲染器
+			if isRecordingEnabled, let recorder = audioRecorder {
+				audioTrack.add(recorder)
+				print("✅ [WebRTCConnector] 已添加音频渲染器")
+			}
+		}
+	}
 	public func peerConnection(_: LKRTCPeerConnection, didOpen _: LKRTCDataChannel) {}
 	public func peerConnection(_: LKRTCPeerConnection, didRemove _: LKRTCMediaStream) {}
 	public func peerConnection(_: LKRTCPeerConnection, didChange _: LKRTCSignalingState) {}
