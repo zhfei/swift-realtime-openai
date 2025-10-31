@@ -51,6 +51,12 @@ public final class Conversation: @unchecked Sendable {
 	/// Whether the model is currently speaking.
 	public private(set) var isModelSpeaking: Bool = false
 
+	/// Callback invoked when audio playback starts.
+	public var onAudioPlaybackStarted: (() -> Void)?
+
+	/// Callback invoked when audio playback stops.
+	public var onAudioPlaybackStopped: (() -> Void)?
+
 	/// A list of messages in the conversation.
 	/// Note that this doesn't include function call events. To get a complete list, use `entries`.
 	public var messages: [Item.Message] {
@@ -250,8 +256,14 @@ private extension Conversation {
 				isUserSpeaking = false
 			case .outputAudioBufferStarted:
 				isModelSpeaking = true
+				Task { @MainActor in
+					self.onAudioPlaybackStarted?()
+				}
 			case .outputAudioBufferStopped:
 				isModelSpeaking = false
+				Task { @MainActor in
+					self.onAudioPlaybackStopped?()
+				}
 			case let .responseOutputItemDone(_, _, _, item):
 				updateEvent(id: item.id) { message in
 					guard case let .message(newMessage) = item else { return }
