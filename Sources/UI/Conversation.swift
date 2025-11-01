@@ -1,12 +1,14 @@
 import Core
 import WebRTC
 import AVFAudio
+import AVFoundation
 import Foundation
 
 public enum ConversationError: Error {
 	case sessionNotFound
 	case invalidEphemeralKey
 	case converterInitializationFailed
+	case noUserAudioRecording
 }
 
 @MainActor @Observable
@@ -17,6 +19,9 @@ public final class Conversation: @unchecked Sendable {
 	private var task: Task<Void, Error>!
 	private let sessionUpdateCallback: SessionUpdateCallback?
 	private let errorStream: AsyncStream<ServerError>.Continuation
+	
+	/// ??????????????
+	private var audioRecorder: AudioRecorder?
 
 	/// Whether to print debug information to the console.
 	public var debug: Bool
@@ -56,6 +61,11 @@ public final class Conversation: @unchecked Sendable {
 
 	/// Callback invoked when audio playback stops.
 	public var onAudioPlaybackStopped: (() -> Void)?
+	
+	/// Whether audio recording is enabled.
+	public var isRecording: Bool {
+		audioRecorder?.state == .recording || audioRecorder?.state == .paused
+	}
 
 	/// A list of messages in the conversation.
 	/// Note that this doesn't include function call events. To get a complete list, use `entries`.
@@ -171,6 +181,135 @@ public final class Conversation: @unchecked Sendable {
 	/// Send the response of a function call.
 	public func send(result output: Item.FunctionCallOutput) throws {
 		try send(event: .createConversationItem(.functionCallOutput(output)))
+	}
+	
+	// MARK: - Audio Recording
+	
+	/// ????????
+	/// - Parameter userAudioURL: ????????? URL?????????????????
+	/// - Throws: ???????????
+	public func startRecording(userAudioURL: URL? = nil) throws {
+		// ???????????
+		if isRecording {
+			stopRecording()
+		}
+		
+		// ???????? URL
+		let userURL = userAudioURL ?? FileManager.default.temporaryDirectory
+			.appendingPathComponent("user_audio_\(UUID().uuidString).caf")
+		
+		// ???????
+		let recorder = AudioRecorder()
+		try recorder.startRecording(to: userURL)
+		self.audioRecorder = recorder
+	}
+	
+	/// ????????
+	public func stopRecording() {
+		audioRecorder?.stop()
+		audioRecorder = nil
+	}
+	
+	/// ?? AI ???????
+	/// - Returns: ???? AI ??????????????
+	public func extractAIAudioData() -> [Data] {
+		return entries.compactMap { item -> Data? in
+			guard case let .message(message) = item,
+				  message.role == .assistant else {
+				return nil
+			}
+			
+			// ????????
+			return message.content.compactMap { content -> Data? in
+				switch content {
+				case let .audio(audio):
+					return audio.audio?.data
+				default:
+					return nil
+				}
+			}.reduce(Data(), +)
+		}
+	}
+	
+	/// ????????????
+	/// - Parameters:
+	///   - outputURL: ???? URL
+	///   - completion: ????????????
+	/// - Note: ?????????????? AI ???????
+	public func saveCallRecording(
+		to outputURL: URL,
+		completion: @escaping (Result<URL, Error>) -> Void
+	) {
+		guard let userAudioURL = audioRecorder?.getRecordingURL() else {
+			completion(.failure(ConversationError.noUserAudioRecording))
+			return
+		}
+		
+		// ?? AI ????
+		let aiAudioData = extractAIAudioData()
+		
+		// ???? AI ????????????
+		if aiAudioData.isEmpty {
+			do {
+				try FileManager.default.copyItem(at: userAudioURL, to: outputURL)
+				completion(.success(outputURL))
+			} catch {
+				completion(.failure(error))
+			}
+			return
+		}
+		
+		// ???????? AI ????
+		let tempDir = FileManager.default.temporaryDirectory
+			.appendingPathComponent("call_recording_\(UUID().uuidString)")
+		
+		do {
+			try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+		} catch {
+			completion(.failure(error))
+			return
+		}
+		
+		// ?? AI ?????????
+		let aiAudioFormat = AVAudioFormat(
+			commonFormat: .pcmFormatInt16,
+			sampleRate: 24000,
+			channels: 1,
+			interleaved: false
+		)!
+		
+		var aiAudioURLs: [URL] = []
+		for (index, audioData) in aiAudioData.enumerated() {
+			let aiURL = tempDir.appendingPathComponent("ai_\(index).caf")
+			
+			do {
+				guard let audioFile = try? AVAudioFile(forWriting: aiURL, settings: aiAudioFormat.settings),
+					  let buffer = AVAudioPCMBuffer.fromData(audioData, format: aiAudioFormat) else {
+					continue
+				}
+				
+				try audioFile.write(from: buffer)
+				aiAudioURLs.append(aiURL)
+			} catch {
+				print("Error saving AI audio segment: \(error)")
+			}
+		}
+		
+		// ????????????? + AI ??
+		let allAudioURLs = [userAudioURL] + aiAudioURLs
+		
+		AudioMerger.merge(audioURLs: allAudioURLs, to: outputURL) { result in
+			// ??????
+			try? FileManager.default.removeItem(at: tempDir)
+			
+			completion(result)
+		}
+	}
+	
+	/// ???????????? URL
+	/// - Returns: ?????? URL????????? nil
+	public func getUserAudioURL() -> URL? {
+		return audioRecorder?.getRecordingURL()
 	}
 }
 
